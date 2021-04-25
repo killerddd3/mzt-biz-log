@@ -1,18 +1,27 @@
 # Springboot-注解-通用操作日志组件
-此组件解决的问题是：
-「谁」在「什么时间」对「什么」做了「什么事」
 
->本组件目前针对 Spring-boot 做了 Autoconfig，如果是 SpringMVC，也可自己在 xml 初始化 bean
+此组件解决的问题是： 「谁」在「什么时间」对「什么」做了「什么事」
+
+> 本组件目前针对 Spring-boot 做了 Autoconfig，如果是 SpringMVC，也可自己在 xml 初始化 bean
+
+## Change Log
+
+|版本 |状态|
+|----|----|
+| 1.0.1  |发版 |
+| 1.0.4  |支持Context添加变量|
 
 ## 使用方式
 
 ### 基本使用
+
 #### maven依赖添加SDK依赖
+
 ```
         <dependency>
           <groupId>io.github.mouzt</groupId>
           <artifactId>bizlog-sdk</artifactId>
-          <version>1.0.2</version>
+          <version>1.0.4</version>
         </dependency>
 ```
 #### SpringBoot入口打开开关,添加 @EnableLogRecord 注解
@@ -157,7 +166,7 @@ public class DefaultOperatorGetServiceImpl implements IOperatorGetService {
     }
 
     //使用了自定义函数，主要是在 {{#orderId}} 的大括号中间加了 functionName
-    @LogRecordAnnotation(success = "更新了订单ORDER{#orderId}},更新内容为...",
+    @LogRecordAnnotation(success = "更新了订单{ORDER{#orderId}},更新内容为...",
             prefix = LogRecordType.ORDER, bizNo = "{{#order.orderNo}}",
             detail = "{{#order.toString()}}")
     public boolean update(Long orderId, Order order) {
@@ -197,9 +206,10 @@ public class DefaultOperatorGetServiceImpl implements IOperatorGetService {
     	return xxx;
     }
 ```
-###### 8. 日志文案调整 模版中使用方法参数之外的变量
+###### 8. 日志文案调整 模版中使用方法参数之外的变量&函数中也可以使用Context中变量
 可以在方法中通过 LogRecordContext.putVariable(variableName, Object) 的方法添加变量，第一个对象为变量名称，后面为变量的对象，
-然后我们就可以使用 SpEL 使用这个变量了，例如：例子中的 {{#innerOrder.productName}} 是在方法中设置的变量
+然后我们就可以使用 SpEL 使用这个变量了，例如：例子中的 {{#innerOrder.productName}} 是在方法中设置的变量，除此之外，在上面提到的自定义函数中也可以使用LogRecordContext中的变量。
+（注意：LogRecordContext中变量的生命周期为这个方法，超出这个方法，方法中set到Context的变量就获取不到了）
 ```
     @Override
     @LogRecordAnnotation(
@@ -215,8 +225,69 @@ public class DefaultOperatorGetServiceImpl implements IOperatorGetService {
     }
 ```
 
+###### 9. 函数中使用LogRecordContext的变量
+
+使用 LogRecordContext.putVariable(variableName, Object) 添加的变量除了可以在注解的 SpEL 表达式上使用，还可以在自定义函数中使用 这种方式比较复杂，下面例子中示意了列表的变化，比如
+从[A,B,C] 改到 [B,D] 那么日志显示：「删除了A，增加了D」
+
+```
+    @LogRecord(success = "{DIFF_LIST{'文档地址'}}", bizNo = "{{#id}}", prefix = REQUIREMENT)
+    public void updateRequirementDocLink(String currentMisId, Long id, List<String> docLinks) {
+        RequirementDO requirementDO = getRequirementDOById(id);
+        LogRecordContext.putVariable("oldList", requirementDO.getDocLinks());
+        LogRecordContext.putVariable("newList", docLinks);
+
+        requirementModule.updateById("docLinks", RequirementUpdateDO.builder()
+                .id(id)
+                .docLinks(docLinks)
+                .updater(currentMisId)
+                .updateTime(new Date())
+                .build());
+    }
+    
+    
+    @Component
+    public class DiffListParseFunction implements IParseFunction {
+    
+        @Override
+        public String functionName() {
+            return "DIFF_LIST";
+        }
+    
+        @SuppressWarnings("unchecked")
+        @Override
+        public String apply(String value) {
+            if (StringUtils.isBlank(value)) {
+                return value;
+            }
+            List<String> oldList = (List<String>) LogRecordContext.getVariable("oldList");
+            List<String> newList = (List<String>) LogRecordContext.getVariable("newList");
+            oldList = oldList == null ? Lists.newArrayList() : oldList;
+            newList = newList == null ? Lists.newArrayList() : newList;
+            Set<String> deletedSets = Sets.difference(Sets.newHashSet(oldList), Sets.newHashSet(newList));
+            Set<String> addSets = Sets.difference(Sets.newHashSet(newList), Sets.newHashSet(oldList));
+            StringBuilder stringBuilder = new StringBuilder();
+            if (CollectionUtils.isNotEmpty(addSets)) {
+                stringBuilder.append("新增了 <b>").append(value).append("</b>：");
+                for (String item : addSets) {
+                    stringBuilder.append(item).append("，");
+                }
+            }
+            if (CollectionUtils.isNotEmpty(deletedSets)) {
+                stringBuilder.append("删除了 <b>").append(value).append("</b>：");
+                for (String item : deletedSets) {
+                    stringBuilder.append(item).append("，");
+                }
+            }
+            return StringUtils.isBlank(stringBuilder) ? null : stringBuilder.substring(0, stringBuilder.length() - 1);
+        }
+    }
+```
+
 #### 框架的扩展点
+
 * 重写OperatorGetServiceImpl通过上下文获取用户的扩展，例子如下
+
 ```
 @Service
 public class DefaultOperatorGetServiceImpl implements IOperatorGetService {
@@ -295,15 +366,23 @@ public class UserParseFunction implements IParseFunction {
     }
 }
 ```
+
 #### 变量相关
+
 > LogRecordAnnotation 可以使用的变量出了参数也可以使用返回值#_ret变量，以及异常的错误信息#_errorMsg，也可以通过SpEL的 T 方式调用静态方法噢
 
-#### 扩展
-已经在版本 1.0.2 终实现
-实现一个 Log的 Context，可以解决方法参数中没有的变量但是想使用的问题，初步想法是可以通过在方法中 add 变量的形式实现
+#### Change Log & TODO
+
+| 名称 |状态 |
+|----|----| 
+| 支持Context添加变量|1.0.4 已经支持 | 
+|支持对象的diff|TODO| 
+| 支持List的日志记录| TODO |
 
 #### 注意点：
+
 ⚠️ 整体日志拦截是在方法执行之后记录的，所以对于方法内部修改了方法参数之后，LogRecordAnnotation 的注解上的 SpEL 对变量的取值是修改后的值哦～
 
-## Author 
+## Author
+
 mail : mztsmile@163.com
